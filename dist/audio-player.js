@@ -1,19 +1,16 @@
-// ---------------------------------------------------------------
-// ESM / TypeScript version of the original CommonJS implementation.
-// ---------------------------------------------------------------
+// src/audio-player.ts
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-// ---------------------------------------------------------------------------
-// Helper – generate a short random id for each playback instance
-// ---------------------------------------------------------------------------
+/* --------------------------------------------------------------------- */
+/* Helper – generate a short random id for each playback instance        */
+/* --------------------------------------------------------------------- */
 function makeId() {
-    // 4 bytes → 8‑hex characters, e.g. "9b1c7a3f"
-    return crypto.randomBytes(4).toString('hex');
+    return crypto.randomBytes(4).toString('hex'); // e.g. "9b1c7a3f"
 }
-// ---------------------------------------------------------------------------
-// Platform‑specific command builders
-// ---------------------------------------------------------------------------
+/* --------------------------------------------------------------------- */
+/* Platform‑specific command builders                                    */
+/* --------------------------------------------------------------------- */
 const macPlayCommand = (filePath, volume) => [
     'afplay',
     filePath,
@@ -35,10 +32,13 @@ const windowsPlayCommand = (filePath, volume) => [
     '-Command',
     windowsPowerShellScript(filePath, volume),
 ];
+/* --------------------------------------------------------------------- */
+/* Store active children so we can stop them later                        */
+/* --------------------------------------------------------------------- */
 const activeChildren = new Map();
-// ---------------------------------------------------------------------------
-// Public API – exported as named functions (you can also re‑export a single object if you prefer)
-// ---------------------------------------------------------------------------
+/* --------------------------------------------------------------------- */
+/* Public API                                                            */
+/* --------------------------------------------------------------------- */
 /**
  * Start playing an audio file.
  *
@@ -46,7 +46,16 @@ const activeChildren = new Map();
  * @param volume   Normalised volume (0‑1). On macOS it is scaled internally
  *                 to 0‑2 because `afplay` uses a different range.
  *
- * @returns A opaque playback‑id that can be passed to {@link stop}.
+ * @returns An object containing:
+ *   - `id`: the opaque playback‑id you can later pass to {@link stop}.
+ *   - `finished`: a promise that resolves when the sound stops playing.
+ *
+ * If you only need the id (the old behaviour) you can destructure it:
+ *
+ * ```ts
+ * const { id } = play('ding.wav');
+ * // or simply: const id = (await play('ding.wav')).id;
+ * ```
  */
 export function play(filePath, volume = 0.5) {
     // Resolve the path once – PowerShell needs Windows‑style backslashes,
@@ -59,7 +68,7 @@ export function play(filePath, volume = 0.5) {
         ? macPlayCommand(absolutePath, volForOs)
         : windowsPlayCommand(absolutePath, volForOs);
     // Spawn the child – we **do not** use stdio: 'ignore' because on Windows
-    // PowerShell may emit some warning messages that would otherwise block.
+    // PowerShell may emit warning messages that would otherwise block.
     const child = spawn(cmd, args, {
         detached: false,
         windowsHide: true,
@@ -67,11 +76,20 @@ export function play(filePath, volume = 0.5) {
     // Create an id and store it so we can kill later
     const id = makeId();
     activeChildren.set(id, child);
-    // Clean up the map when the process ends or errors.
-    const cleanup = () => activeChildren.delete(id);
+    // -----------------------------------------------------------------
+    // Build the promise that resolves when the process ends (or errors)
+    // -----------------------------------------------------------------
+    let resolveFinished;
+    const finished = new Promise((resolve) => {
+        resolveFinished = resolve;
+    });
+    const cleanup = () => {
+        activeChildren.delete(id);
+        resolveFinished(); // <-- resolve the promise
+    };
     child.once('exit', cleanup);
     child.once('error', cleanup);
-    return id;
+    return { id, finished };
 }
 /**
  * Stop playback that was started with {@link play}.
@@ -100,8 +118,8 @@ export function stopAll() {
         stop(id);
     }
 }
-// ---------------------------------------------------------------
-// Optional default export – mirrors the original `module.exports` shape
-// ---------------------------------------------------------------
+/* --------------------------------------------------------------------- */
+/* Default export – mirrors the original `module.exports` shape            */
+/* --------------------------------------------------------------------- */
 export default { play, stop, stopAll };
 //# sourceMappingURL=audio-player.js.map
