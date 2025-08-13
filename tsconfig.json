@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",                 // modern Node version
+    "module": "NodeNext",               // produces ESM with .js extensions
+    "declaration": true,                // generate *.d.ts files
+    "outDir": "./dist",
+    "rootDir": "./src",                 // put your TS sources under src/
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
