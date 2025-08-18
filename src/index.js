@@ -53,7 +53,14 @@ module.exports = {
     
     return {
       stop: () => child.kill(),
-      play: () => promise, 
+      play: async () => {
+        try {
+          const result = await promise;
+          return result;
+        } catch (error) {
+          throw error;
+        }
+      },
       process: child
     };
   }
