@@ -21,7 +21,7 @@ const macPlayCommand = (path, volume, rate) => `afplay \"${path}\" -v ${volume} 
 const addPresentationCore = `Add-Type -AssemblyName presentationCore;`;
 const createMediaPlayer = `$player = New-Object system.windows.media.mediaplayer;`;
 const loadAudioFile = path => `$player.open('${path}');`;
-const setMediaEndedHandler = `Register-ObjectEvent $player MediaEnded -Action { Write-Output 'DONE' } | Out-Null;`;
+const setMediaEndedHandler = `Register-ObjectEvent $player MediaEnded -Action { Write-Host 'DONE' } | Out-Null;`;
 const playAudio = `$player.Play();`;
 
 const windowsPlayCommand = (path, volume) =>
