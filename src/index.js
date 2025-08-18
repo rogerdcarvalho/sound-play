@@ -11,7 +11,7 @@ function execWithChild(command, options = {}) {
     });
   });
 
-const originalKill = child.kill.bind(child);
+  const originalKill = child.kill.bind(child);
   child.kill = (signal = 'SIGTERM') => {
     try {
       // A negative PID tells Node to signal the entire process group.
@@ -22,22 +22,37 @@ const originalKill = child.kill.bind(child);
     }
   };
 
-  return { promise, child };}
+  return { promise, child };
+}
 
 /* MAC PLAY COMMAND */
 const macPlayCommand = (path, volume, rate) => `afplay \"${path}\" -v ${volume} -r ${rate}`;
 
-/* WINDOW PLAY COMMANDS */
+/* WINDOWS PLAY COMMANDS */
 const addPresentationCore = `Add-Type -AssemblyName presentationCore;`;
-const createMediaPlayer = `$player = New-Object system.windows.media.mediaplayer;`;
-const loadAudioFile = path => `$player.open('${path}');`;
-const playAudio = `$player.Play();`;
-const stopAudio = `Start-Sleep 1; Start-Sleep -s $player.NaturalDuration.TimeSpan.TotalSeconds;Exit;`;
+const createMediaPlayer   = `$player = New-Object system.windows.media.mediaplayer;`;
+const loadAudioFile       = path => `$player.open('${path}');`;
+const playAudio           = `$player.Play();`;
+
+/**
+ * Wait until the MediaPlayer finishes playing.
+ *
+ * PowerShell does not have a built‑in “await” for MediaPlayer, so we poll
+ * `Position` against `NaturalDuration`.  The loop sleeps a short amount of
+ * time (200 ms) to avoid busy‑waiting but still reacts quickly when we kill the
+ * process from Node.
+ */
+const waitForEnd = `
+while ($player.Position -lt $player.NaturalDuration) {
+    Start-Sleep -Milliseconds 200
+}
+`;
 
 const windowPlayCommand = (path, volume) =>
-  `powershell -c ${addPresentationCore} ${createMediaPlayer} ${loadAudioFile(
+  `powershell -NoProfile -Command "` +
+  `${addPresentationCore} ${createMediaPlayer} ${loadAudioFile(
     path,
-  )} $player.Volume = ${volume}; ${playAudio} ${stopAudio}`;
+  )} $player.Volume = ${volume}; ${playAudio} ${waitForEnd}"`;
 
 /**
  * Plays an audio file on Mac or Windows
