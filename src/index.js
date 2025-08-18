@@ -5,14 +5,24 @@ const execPromise = require('util').promisify(exec);
 function execWithChild(command, options = {}) {
   let child;
   const promise = new Promise((resolve, reject) => {
-    child = exec(command, options, (error, stdout, stderr) => {
+    child = exec(command, { ...options, detached: true }, (error, stdout, stderr) => {
       if (error) return reject(error);
       resolve(stdout);
     });
   });
 
-  return { promise, child };
-}
+const originalKill = child.kill.bind(child);
+  child.kill = (signal = 'SIGTERM') => {
+    try {
+      // A negative PID tells Node to signal the entire process group.
+      process.kill(-child.pid, signal);
+    } catch (_) {
+      // If that fails for any reason fall back to killing just the shell.
+      originalKill(signal);
+    }
+  };
+
+  return { promise, child };}
 
 /* MAC PLAY COMMAND */
 const macPlayCommand = (path, volume, rate) => `afplay \"${path}\" -v ${volume} -r ${rate}`;
