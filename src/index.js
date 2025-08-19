@@ -1,92 +1,102 @@
-const { exec, spawn } = require('child_process');
-const execPromise = require('util').promisify(exec);
-
-// Functionality to give caller the ability to stop playing
-function execWithChild(command, options = {}) {
-  let child;
-  const promise = new Promise((resolve, reject) => {
-    child = exec(command, { ...options, detached: true }, (error, stdout, stderr) => {
-      if (error) return reject(error);
-      resolve(stdout);
-    });
-  });
-
-  return { promise, child };
-}
+const { spawn } = require('child_process')
 
 /* MAC PLAY COMMAND */
-const macPlayCommand = (path, volume, rate) => `afplay \"${path}\" -v ${volume} -r ${rate}`;
+const macPlayCommand = (path, volume, rate) => `afplay \"${path}\" -v ${volume} -r ${rate}`
 
-/* WINDOWS PLAY COMMANDS */
-const addPresentationCore = `Add-Type -AssemblyName presentationCore;`;
-const createMediaPlayer = `$player = New-Object system.windows.media.mediaplayer;`;
-const loadAudioFile = path => `$player.open('${path}');`;
-const setMediaEndedHandler = `Register-ObjectEvent $player MediaEnded -Action { Write-Host 'DONE' } | Out-Null;`;
-const playAudio = `$player.Play();`;
+/* WINDOW PLAY COMMANDS */
+const addPresentationCore = `Add-Type -AssemblyName presentationCore;`
+const createMediaPlayer = `$player = New-Object system.windows.media.mediaplayer;`
+const loadAudioFile = path => `$player.open('${path}');`
+const playAudio = `$player.Play();`
+const stopAudio = `Start-Sleep 1; Start-Sleep -s $player.NaturalDuration.TimeSpan.TotalSeconds;Exit;`
 
-const windowsPlayCommand = (path, volume) =>
-  `${addPresentationCore} ${createMediaPlayer} ${loadAudioFile(path)} $player.Volume = ${volume}; ${setMediaEndedHandler}`;
+const windowPlayCommand = (path, volume) =>
+  `powershell -c ${addPresentationCore} ${createMediaPlayer} ${loadAudioFile(
+    path,
+  )} $player.Volume = ${volume}; ${playAudio} ${stopAudio}`
+
+// Script-only (same as above but without the leading "powershell -c")
+const windowPlayScript = (path, volume) =>
+  `${addPresentationCore} ${createMediaPlayer} ${loadAudioFile(
+    path,
+  )} $player.Volume = ${volume}; ${playAudio} ${stopAudio}`
 
 /**
- * Plays an audio file on Mac or Windows
+ * Creates an audio player object on Mac or Windows.
  *
- * @param {string} path - The file path to the audio file that will be played.
- * @param {number} [volume=0.5] - Playback volume as a decimal between 0 and 1.
- *  - Windows: Volume range is 0 to 1. Default is 0.5.
- *  - Mac: Volume range is scaled from 0 to 2 (where 2 is 100% volume). Values above 2 may cause distortion.
- * @param {number} [rate=1] - Playback rate multiplier (only used on Mac). 1 is normal speed.
- * 
- * @throws Will throw an error if audio playback fails.
+ * @param {string} path
+ * @param {number} [volume=0.5]  // Win 0..1; Mac scaled to 0..2
+ * @param {number} [rate=1]      // Mac only
  */
 module.exports = {
-  player: (path, volume=0.5, rate=1) => {
-    const volumeAdjustedByOS = process.platform === 'darwin' ? Math.min(2, volume * 2) : volume;
+  player: (path, volume = 0.5, rate = 1) => {
+    const volumeAdjustedByOS =
+      process.platform === 'darwin' ? Math.min(2, volume * 2) : volume
 
-    if (process.platform === 'darwin') {
-      const playCommand = macPlayCommand(path, volumeAdjustedByOS, rate);
-      const { promise, child } = execWithChild(playCommand, { windowsHide: true });
-      
-      return {
-        stop: () => child.kill(),
-        play: async () => {
-          try {
-            const result = await promise;
-            return result;
-          } catch (error) {
-            throw error;
-          }
-        },
-        process: child
-      };
-    } else {
-      // Windows: PowerShell session, resolves on MediaEnded, cleans up after
-      const child = spawn("powershell.exe", ["-NoExit", "-Command", windowsPlayCommand(path, volumeAdjustedByOS)], {
-        windowsHide: true,
-        stdio: ["pipe", "pipe", "pipe"]
-      });
+    let child = null
+    let playing = false
+    let playPromise = null
 
-      let resolver;
-      const promise = new Promise((resolve) => { resolver = resolve; });
-
-      child.stdout.on("data", (data) => {
-        if (data.toString().includes("DONE")) {
-          resolver("Playback finished");
-          child.kill();
-        }
-      });
-
-      return {
-        stop: () => {
-          child.stdin.write("$player.Stop()\n");
-          resolver("Playback stopped");
-          child.kill();
-        },
-        play: async () => {
-          child.stdin.write(playAudio + "\n");
-          return promise;
-        },
-        process: child
-      };
+    const spawnProcess = () => {
+      if (process.platform === 'darwin') {
+        // Use afplay directly so signals stop playback
+        return spawn(
+          'afplay',
+          [path, '-v', String(volumeAdjustedByOS), '-r', String(rate)],
+          { stdio: 'ignore', windowsHide: true }
+        )
+      }
+      // Windows: keep using System.Windows.Media.MediaPlayer via PowerShell
+      const script = windowPlayScript(path, volumeAdjustedByOS)
+      return spawn(
+        'powershell',
+        ['-NoProfile', '-NonInteractive', '-Command', script],
+        { stdio: 'ignore', windowsHide: true }
+      )
     }
-  }
-};
+
+    const play = () => {
+      if (playing) return playPromise
+      child = spawnProcess()
+      playing = true
+
+      playPromise = new Promise((resolve, reject) => {
+        child.once('error', (err) => {
+          playing = false
+          child = null
+          reject(err)
+        })
+        child.once('exit', (code, signal) => {
+          playing = false
+          const wasKilled = !!signal
+          const okExit = code === 0 && !wasKilled
+          child = null
+          okExit ? resolve() : reject(new Error(wasKilled ? 'Playback stopped' : `Playback failed (code ${code})`))
+        })
+      })
+
+      return playPromise
+    }
+
+    const stop = () => {
+      if (!child) return false
+      try {
+        if (process.platform === 'win32') {
+          // Kill PowerShell and its children to ensure MediaPlayer stops
+          spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          })
+        } else {
+          // macOS: send SIGTERM to afplay (direct child), fallback to SIGKILL
+          if (!child.kill('SIGTERM')) child.kill('SIGKILL')
+        }
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    return { play, stop }
+  },
+}
